@@ -2,16 +2,23 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const GRID_SIZE = 20;
+
+// Состояние приложения
 let isDrawing = false;
 let currentTool = 'pencil';
 let startX, startY;
 let currentColor = '#000000';
 let currentSize = 5;
 let hasGrid = false;
+
+// Хранение элементов
+let drawings = [];
 let images = [];
 let selectedImage = null;
 let isDraggingImage = false;
 let isResizingImage = false;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
 
 // PeerJS соединение
 let peer;
@@ -52,14 +59,15 @@ function setupConnection(connection) {
     });
 }
 
-// Обработка действий от удаленного пользователя
+// Обработка удаленных действий
 function handleRemoteAction(data) {
     switch(data.type) {
         case 'draw':
             drawRemote(data.x, data.y, data.color, data.size);
             break;
         case 'shape':
-            drawRemoteShape(data);
+            drawings.push(data);
+            redrawAll();
             break;
         case 'clear':
             clearCanvas();
@@ -70,39 +78,36 @@ function handleRemoteAction(data) {
     }
 }
 
-// Отправка действий другому пользователю
+// Отправка данных
 function sendData(data) {
     if (conn && conn.open) {
         conn.send(data);
     }
 }
 
-// Инструменты рисования
-document.getElementById('pencil-btn').addEventListener('click', () => setTool('pencil'));
-document.getElementById('eraser-btn').addEventListener('click', () => setTool('eraser'));
-document.getElementById('line-btn').addEventListener('click', () => setTool('line'));
-document.getElementById('rect-btn').addEventListener('click', () => setTool('rect'));
-document.getElementById('circle-btn').addEventListener('click', () => setTool('circle'));
-document.getElementById('triangle-btn').addEventListener('click', () => setTool('triangle'));
-document.getElementById('grid-btn').addEventListener('click', toggleGrid);
-document.getElementById('clear-btn').addEventListener('click', clearCanvas);
-document.getElementById('save-btn').addEventListener('click', saveCanvas);
-document.getElementById('upload-btn').addEventListener('click', () => document.getElementById('image-upload').click());
-document.getElementById('connect-btn').addEventListener('click', connectToPeer);
-document.getElementById('copy-id-btn').addEventListener('click', copyMyId);
-document.getElementById('color-picker').addEventListener('input', (e) => currentColor = e.target.value);
-document.getElementById('size-picker').addEventListener('input', (e) => {
-    currentSize = e.target.value;
-    document.getElementById('size-value').textContent = currentSize;
-});
-document.getElementById('image-upload').addEventListener('change', handleImageUpload);
+// Инициализация инструментов
+function initTools() {
+    document.getElementById('pencil-btn').addEventListener('click', () => setTool('pencil'));
+    document.getElementById('eraser-btn').addEventListener('click', () => setTool('eraser'));
+    document.getElementById('line-btn').addEventListener('click', () => setTool('line'));
+    document.getElementById('rect-btn').addEventListener('click', () => setTool('rect'));
+    document.getElementById('circle-btn').addEventListener('click', () => setTool('circle'));
+    document.getElementById('triangle-btn').addEventListener('click', () => setTool('triangle'));
+    document.getElementById('grid-btn').addEventListener('click', toggleGrid);
+    document.getElementById('clear-btn').addEventListener('click', clearCanvas);
+    document.getElementById('save-btn').addEventListener('click', saveCanvas);
+    document.getElementById('upload-btn').addEventListener('click', () => document.getElementById('image-upload').click());
+    document.getElementById('connect-btn').addEventListener('click', connectToPeer);
+    document.getElementById('copy-id-btn').addEventListener('click', copyMyId);
+    document.getElementById('color-picker').addEventListener('input', (e) => currentColor = e.target.value);
+    document.getElementById('size-picker').addEventListener('input', (e) => {
+        currentSize = e.target.value;
+        document.getElementById('size-value').textContent = currentSize;
+    });
+    document.getElementById('image-upload').addEventListener('change', handleImageUpload);
+}
 
-// Обработка событий холста
-canvas.addEventListener('mousedown', startDrawing);
-canvas.addEventListener('mousemove', draw);
-canvas.addEventListener('mouseup', stopDrawing);
-canvas.addEventListener('mouseout', stopDrawing);
-
+// Работа с холстом
 function setTool(tool) {
     currentTool = tool;
     document.querySelectorAll('.tool-btn.active').forEach(btn => btn.classList.remove('active'));
@@ -112,7 +117,7 @@ function setTool(tool) {
 function toggleGrid() {
     hasGrid = !hasGrid;
     document.getElementById('grid-btn').classList.toggle('active', hasGrid);
-    drawBackground();
+    redrawAll();
 }
 
 function drawBackground() {
@@ -139,26 +144,43 @@ function drawBackground() {
     }
 }
 
+// Обработка событий мыши
+canvas.addEventListener('mousedown', startDrawing);
+canvas.addEventListener('mousemove', draw);
+canvas.addEventListener('mouseup', stopDrawing);
+canvas.addEventListener('mouseout', stopDrawing);
+
 function startDrawing(e) {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
-    // Проверяем, не выбрано ли изображение
+
+    // Проверка на клик по изображению
     for (let i = images.length - 1; i >= 0; i--) {
         const img = images[i];
-        if (x >= img.x && x <= img.x + img.width && y >= img.y && y <= img.y + img.height) {
-            // Проверяем, не в углу ли для изменения размера
-            if (Math.abs(x - (img.x + img.width)) < 20 && Math.abs(y - (img.y + img.height)) < 20) {
-                isResizingImage = true;
-            } else {
-                isDraggingImage = true;
-            }
+        
+        // Проверка на изменение размера
+        if (Math.abs(x - (img.x + img.width)) < 15 && 
+            Math.abs(y - (img.y + img.height)) < 15) {
+            isResizingImage = true;
             selectedImage = img;
+            startX = x;
+            startY = y;
+            return;
+        }
+        
+        // Проверка на перемещение
+        if (x >= img.x && x <= img.x + img.width && 
+            y >= img.y && y <= img.y + img.height) {
+            isDraggingImage = true;
+            selectedImage = img;
+            dragOffsetX = x - img.x;
+            dragOffsetY = y - img.y;
             return;
         }
     }
-    
+
+    // Если не кликнули на изображение, начинаем рисование
     isDrawing = true;
     startX = x;
     startY = y;
@@ -175,25 +197,33 @@ function draw(e) {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
+
+    // Перемещение изображения
     if (isDraggingImage && selectedImage) {
-        selectedImage.x += x - startX;
-        selectedImage.y += y - startY;
-        startX = x;
-        startY = y;
-        redrawCanvas();
+        selectedImage.x = x - dragOffsetX;
+        selectedImage.y = y - dragOffsetY;
+        redrawAll();
         return;
     }
-    
+
+    // Изменение размера изображения
     if (isResizingImage && selectedImage) {
-        selectedImage.width = Math.max(20, selectedImage.width + (x - startX));
-        selectedImage.height = Math.max(20, selectedImage.height + (y - startY));
-        startX = x;
-        startY = y;
-        redrawCanvas();
+        const newWidth = Math.max(20, x - selectedImage.x);
+        const newHeight = Math.max(20, y - selectedImage.y);
+        
+        if (e.shiftKey) { // Сохранение пропорций с Shift
+            const ratio = selectedImage.img.width / selectedImage.img.height;
+            selectedImage.width = newWidth;
+            selectedImage.height = newWidth / ratio;
+        } else {
+            selectedImage.width = newWidth;
+            selectedImage.height = newHeight;
+        }
+        
+        redrawAll();
         return;
     }
-    
+
     if (!isDrawing) return;
     
     switch(currentTool) {
@@ -213,7 +243,7 @@ function draw(e) {
         case 'rect':
         case 'circle':
         case 'triangle':
-            redrawCanvas();
+            redrawAll();
             drawShape(startX, startY, x, y);
             break;
     }
@@ -225,13 +255,19 @@ function stopDrawing() {
         const endX = event.clientX - rect.left;
         const endY = event.clientY - rect.top;
         
-        sendData({
-            type: 'shape',
-            shapeType: currentTool,
+        const newShape = {
+            type: currentTool,
             x1: startX, y1: startY,
             x2: endX, y2: endY,
             color: currentColor,
             size: currentSize
+        };
+        
+        drawings.push(newShape);
+        redrawAll();
+        sendData({
+            type: 'shape',
+            ...newShape
         });
     }
     
@@ -241,6 +277,7 @@ function stopDrawing() {
     selectedImage = null;
 }
 
+// Рисование фигур
 function drawShape(x1, y1, x2, y2) {
     ctx.beginPath();
     ctx.lineWidth = currentSize;
@@ -275,6 +312,7 @@ function drawShape(x1, y1, x2, y2) {
     }
 }
 
+// Удаленное рисование
 function drawRemote(x, y, color, size) {
     ctx.lineWidth = size;
     ctx.strokeStyle = color;
@@ -287,55 +325,64 @@ function drawRemote(x, y, color, size) {
     ctx.moveTo(x, y);
 }
 
-function drawRemoteShape(data) {
-    ctx.lineWidth = data.size;
-    ctx.strokeStyle = data.color;
-    ctx.fillStyle = data.color;
-    
-    ctx.beginPath();
-    
-    switch(data.shapeType) {
-        case 'line':
-            ctx.moveTo(data.x1, data.y1);
-            ctx.lineTo(data.x2, data.y2);
-            ctx.stroke();
-            break;
-            
-        case 'rect':
-            ctx.rect(data.x1, data.y1, data.x2 - data.x1, data.y2 - data.y1);
-            ctx.stroke();
-            break;
-            
-        case 'circle':
-            const radius = Math.sqrt(Math.pow(data.x2 - data.x1, 2) + Math.pow(data.y2 - data.y1, 2));
-            ctx.arc(data.x1, data.y1, radius, 0, Math.PI * 2);
-            ctx.stroke();
-            break;
-            
-        case 'triangle':
-            ctx.moveTo(data.x1, data.y1);
-            ctx.lineTo(data.x2, data.y2);
-            ctx.lineTo(data.x1 * 2 - data.x2, data.y2);
-            ctx.closePath();
-            ctx.stroke();
-            break;
-    }
-}
-
-function clearCanvas() {
+// Перерисовка всего холста
+function redrawAll() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawBackground();
-    images = [];
-    sendData({ type: 'clear' });
+    
+    // Рисуем все сохраненные фигуры
+    drawings.forEach(shape => {
+        ctx.beginPath();
+        ctx.lineWidth = shape.size;
+        ctx.strokeStyle = shape.color;
+        ctx.fillStyle = shape.color;
+        
+        switch(shape.type) {
+            case 'line':
+                ctx.moveTo(shape.x1, shape.y1);
+                ctx.lineTo(shape.x2, shape.y2);
+                ctx.stroke();
+                break;
+                
+            case 'rect':
+                ctx.rect(shape.x1, shape.y1, shape.x2 - shape.x1, shape.y2 - shape.y1);
+                ctx.stroke();
+                break;
+                
+            case 'circle':
+                const radius = Math.sqrt(Math.pow(shape.x2 - shape.x1, 2) + Math.pow(shape.y2 - shape.y1, 2));
+                ctx.arc(shape.x1, shape.y1, radius, 0, Math.PI * 2);
+                ctx.stroke();
+                break;
+                
+            case 'triangle':
+                ctx.moveTo(shape.x1, shape.y1);
+                ctx.lineTo(shape.x2, shape.y2);
+                ctx.lineTo(shape.x1 * 2 - shape.x2, shape.y2);
+                ctx.closePath();
+                ctx.stroke();
+                break;
+        }
+    });
+    
+    // Рисуем все изображения
+    images.forEach(img => {
+        ctx.drawImage(img.img, img.x, img.y, img.width, img.height);
+        
+        // Маркер изменения размера (только для выбранного изображения)
+        if (selectedImage === img) {
+            ctx.fillStyle = 'red';
+            ctx.fillRect(
+                img.x + img.width - 10, 
+                img.y + img.height - 10, 
+                15, 
+                15
+            );
+        }
+    });
 }
 
-function saveCanvas() {
-    const link = document.createElement('a');
-    link.download = 'drawing.png';
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-}
-
+// Работа с изображениями
 function handleImageUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -344,17 +391,32 @@ function handleImageUpload(e) {
     reader.onload = (event) => {
         const img = new Image();
         img.onload = () => {
+            const maxSize = 300;
+            let width = img.width;
+            let height = img.height;
+            
+            if (width > maxSize || height > maxSize) {
+                const ratio = width / height;
+                if (width > height) {
+                    width = maxSize;
+                    height = maxSize / ratio;
+                } else {
+                    height = maxSize;
+                    width = maxSize * ratio;
+                }
+            }
+            
             const newImage = {
                 img: img,
                 x: 50,
                 y: 50,
-                width: img.width > 300 ? 300 : img.width,
-                height: img.height > 300 ? 300 : img.height
+                width: width,
+                height: height
             };
-            images.push(newImage);
-            redrawCanvas();
             
-            // Отправляем изображение другому пользователю
+            images.push(newImage);
+            redrawAll();
+            
             sendData({
                 type: 'image',
                 data: event.target.result,
@@ -379,23 +441,25 @@ function addRemoteImage(data) {
             width: data.width,
             height: data.height
         });
-        redrawCanvas();
+        redrawAll();
     };
     img.src = data.data;
 }
 
-function redrawCanvas() {
+// Дополнительные функции
+function clearCanvas() {
+    drawings = [];
+    images = [];
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawBackground();
-    
-    // Рисуем все изображения
-    images.forEach(img => {
-        ctx.drawImage(img.img, img.x, img.y, img.width, img.height);
-        
-        // Рисуем маркер для изменения размера
-        ctx.fillStyle = 'red';
-        ctx.fillRect(img.x + img.width - 5, img.y + img.height - 5, 10, 10);
-    });
+    sendData({ type: 'clear' });
+}
+
+function saveCanvas() {
+    const link = document.createElement('a');
+    link.download = 'drawing.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
 }
 
 function connectToPeer() {
@@ -413,4 +477,5 @@ function copyMyId() {
 
 // Инициализация
 initPeerJS();
+initTools();
 drawBackground();
